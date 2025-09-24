@@ -1,0 +1,4 @@
+# Python dependencies for timetable optimization
+ortools>=9.7.2996
+numpy>=1.24.0
+pandas>=2.0.0
