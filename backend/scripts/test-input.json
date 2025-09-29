@@ -1,0 +1,118 @@
+{
+    "department": {
+      "id": 2,
+      "name": "Computer Science Engineering",
+      "section": "B",
+      "semester": 6
+    },
+    "subjects": [
+      {
+        "id": 4,
+        "name": "Computer Networks",
+        "code": "CS401",
+        "is_lab": false,
+        "teacher_id": 1,
+        "teacher_name": "Dr. Smith",
+        "max_periods_per_week": 6,
+        "max_periods_per_day": 2,
+        "teacher_max_sessions": 12
+      },
+      {
+        "id": 1,
+        "name": "Data Structures and Algorithms",
+        "code": "CS201",
+        "is_lab": false,
+        "teacher_id": 2,
+        "teacher_name": "Dr. Johnson",
+        "max_periods_per_week": 6,
+        "max_periods_per_day": 2,
+        "teacher_max_sessions": 12
+      },
+      {
+        "id": 2,
+        "name": "Database Management Systems",
+        "code": "CS301",
+        "is_lab": false,
+        "teacher_id": 3,
+        "teacher_name": "Dr. Williams",
+        "max_periods_per_week": 3,
+        "max_periods_per_day": 1,
+        "teacher_max_sessions": 6
+      },
+      {
+        "id": 3,
+        "name": "DBMS Laboratory",
+        "code": "CS302",
+        "is_lab": true,
+        "teacher_id": 3,
+        "teacher_name": "Dr. Williams",
+        "max_periods_per_week": 3,
+        "max_periods_per_day": 1,
+        "teacher_max_sessions": 6
+      },
+      {
+        "id": 7,
+        "name": "Machine Learning",
+        "code": "CS501",
+        "is_lab": false,
+        "teacher_id": 4,
+        "teacher_name": "Dr. Brown",
+        "max_periods_per_week": 3,
+        "max_periods_per_day": 1,
+        "teacher_max_sessions": 6
+      },
+      {
+        "id": 8,
+        "name": "ML Laboratory",
+        "code": "CS502",
+        "is_lab": true,
+        "teacher_id": 4,
+        "teacher_name": "Dr. Brown",
+        "max_periods_per_week": 3,
+        "max_periods_per_day": 1,
+        "teacher_max_sessions": 6
+      },
+      {
+        "id": 5,
+        "name": "Networks Laboratory",
+        "code": "CS402",
+        "is_lab": true,
+        "teacher_id": 1,
+        "teacher_name": "Dr. Smith",
+        "max_periods_per_week": 3,
+        "max_periods_per_day": 1,
+        "teacher_max_sessions": 6
+      },
+      {
+        "id": 6,
+        "name": "Software Engineering",
+        "code": "CS601",
+        "is_lab": false,
+        "teacher_id": 5,
+        "teacher_name": "Dr. Davis",
+        "max_periods_per_week": 6,
+        "max_periods_per_day": 2,
+        "teacher_max_sessions": 12
+      }
+    ],
+    "rooms": [
+      {
+        "id": 2,
+        "name": "CSE-102",
+        "type": "classroom",
+        "capacity": 60
+      }
+    ],
+    "constraints": {
+      "days_per_week": 5,
+      "periods_per_day": 8,
+      "morning_periods": [0, 1, 2, 3],
+      "evening_periods": [4, 5, 6, 7],
+      "lab_duration": 2,
+      "no_lab_first_period": false,
+      "max_teacher_sessions_per_day": 6,
+      "allow_labs_in_classrooms": true,
+      "allow_theory_in_labs": true,
+      "enforce_lab_continuity": false
+    }
+  }

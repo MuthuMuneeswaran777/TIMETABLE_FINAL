@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // Create axios instance with default config
 const api = axios.create({
-  baseURL: process.env.REACT_APP_API_URL || '/api',
+  baseURL: 'http://localhost:5000/api/',
   timeout: 10000,
 });
 
@@ -66,6 +66,8 @@ export const teachersAPI = {
   update: (id, data) => api.put(`/teachers/${id}`, data),
   delete: (id) => api.delete(`/teachers/${id}`),
   getTimetable: (id) => api.get(`/teachers/${id}/timetable`),
+  getAllocations: (id) => api.get(`/teachers/${id}/allocations`),
+  getStats: (id) => api.get(`/teachers/${id}/stats`),
 };
 
 // Subjects API

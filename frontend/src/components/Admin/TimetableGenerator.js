@@ -24,9 +24,12 @@ import {
 import { 
   PlayArrow as GenerateIcon, 
   Refresh as RegenerateIcon,
-  Download as DownloadIcon,
+  PictureAsPdf as PdfIcon,
+  Download,
 } from '@mui/icons-material';
+import axios from "axios";  
 import { departmentsAPI, timetablesAPI } from '../../services/api';
+import { generateTimetablePdf } from '../../utils/pdfGenerator';
 
 const TimetableGenerator = () => {
   const [filters, setFilters] = useState({
@@ -46,22 +49,193 @@ const TimetableGenerator = () => {
     }
   );
 
+  // Handle PDF export
+  // const handleExportPdf = async () => {
+  //   if (!timetable?.info?.id) {
+  //     setSnackbar({
+  //       open: true,
+  //       message: 'No timetable data available to export',
+  //       severity: 'warning',
+  //     });
+  //     return;
+  //   }
+
+  //   try {
+  //     const token = localStorage.getItem('token');
+  //     const response = await fetch(`http://localhost:5000/api/timetables/${timetable.info.id}/export`, {
+  //       headers: {
+  //         'Authorization': `Bearer ${token}`,
+  //       },
+  //     });
+
+  //     if (!response.ok) {
+  //       throw new Error('Failed to export timetable');
+  //     }
+
+  //     // Get the filename from the content-disposition header or use a default one
+  //     const contentDisposition = response.headers.get('content-disposition');
+  //     let filename = 'timetable.pdf';
+  //     if (contentDisposition) {
+  //       const filenameMatch = contentDisposition.match(/filename="?(.+)"?/);
+  //       if (filenameMatch && filenameMatch[1]) {
+  //         filename = filenameMatch[1];
+  //       }
+  //     }
+
+  //     // Create a blob from the response and create a download link
+  //     const blob = await response.blob();
+  //     const url = window.URL.createObjectURL(blob);
+  //     const a = document.createElement('a');
+  //     a.href = url;
+  //     a.download = filename;
+  //     document.body.appendChild(a);
+  //     a.click();
+  //     window.URL.revokeObjectURL(url);
+  //     a.remove();
+
+  //   } catch (error) {
+  //     console.error('Export error:', error);
+  //     setSnackbar({
+  //       open: true,
+  //       message: error.message || 'Failed to export timetable as PDF',
+  //       severity: 'error',
+  //     });
+  //   }
+  // };
+
   // Fetch timetable based on filters
   const { data: timetable, isLoading: timetableLoading, refetch } = useQuery(
     ['timetable', filters],
     async () => {
       if (!filters.department_id) return null;
-      const response = await timetablesAPI.getByDepartment(
-        filters.department_id, 
-        filters.section, 
-        filters.semester
-      );
-      return response.data;
+      
+      try {
+        // First, get the list of timetables to find the ID
+        const listResponse = await axios.get('http://localhost:5000/api/timetables', {
+          params: {
+            department: filters.department_id,
+            section: filters.section,
+            semester: filters.semester,
+            is_active: true
+          }
+        });
+        
+        if (!listResponse.data?.success || !listResponse.data.data?.length) {
+          throw new Error('No active timetable found');
+        }
+        
+        // Get the most recent active timetable
+        const timetableData = listResponse.data.data[0];
+        
+        // Now get the full timetable with slots
+        const detailsResponse = await axios.get(`http://localhost:5000/api/timetables/${timetableData.id}`, {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          }
+        });
+        
+        // Parse metadata if it exists
+        let metadata = {};
+        if (detailsResponse.data.metadata) {
+          try {
+            metadata = typeof detailsResponse.data.metadata === 'string' 
+              ? JSON.parse(detailsResponse.data.metadata)
+              : detailsResponse.data.metadata;
+          } catch (e) {
+            console.error('Error parsing metadata:', e);
+          }
+        }
+        
+        // Process the schedule from the response
+        const schedule = Array(5).fill().map(() => Array(8).fill(null));
+        
+        if (detailsResponse.data.schedule) {
+          detailsResponse.data.schedule.forEach((daySchedule, dayIndex) => {
+            daySchedule.forEach((slot, timeIndex) => {
+              if (slot) {
+                schedule[dayIndex][timeIndex] = {
+                  department_code: slot.subject_code,
+                  teacher: slot.teacher,
+                  room: slot.room,
+                  subject: slot.subject,
+                  is_lab: slot.is_lab,
+                  room_type: slot.room_type
+                };
+              }
+            });
+          });
+        }
+        
+        return {
+          schedule,
+          metadata,
+          info: {
+            id: detailsResponse.data.id,
+            department: detailsResponse.data.department_name,
+            section: detailsResponse.data.section,
+            semester: detailsResponse.data.semester,
+            generatedAt: detailsResponse.data.generated_at,
+            generatedBy: detailsResponse.data.generated_by_name,
+            totalSlots: detailsResponse.data.slots || 0
+          }
+        };
+        
+      } catch (error) {
+        console.error('Error fetching timetable:', error);
+        return { 
+          schedule: Array(5).fill().map(() => Array(8).fill(null)),
+          info: {
+            department: '',
+            section: '',
+            semester: '',
+            generatedAt: '',
+            generatedBy: ''
+          }
+        };
+      }
     },
     {
       enabled: !!filters.department_id,
+      refetchOnWindowFocus: false
     }
   );
+
+  // const { data: timetable, isLoading: timetableLoading, refetch } = useQuery(
+  //   ['timetable', filters],
+  //   async () => {
+  //     if (!filters.department_id || !filters.semester) {
+  //       return null;
+  //     }
+      
+  //     try {
+  //       const response = await timetablesAPI.getByFilters({
+  //         department_id: filters.department_id,
+  //         semester: filters.semester,
+  //         section: filters.section,
+  //         is_active: true
+  //       });
+        
+  //       if (!response.data || response.data.length === 0) {
+  //         throw new Error('No active timetable found');
+  //       }
+        
+  //       return response.data[0]; // Return the first matching timetable
+  //     } catch (error) {
+  //       console.error('Error fetching timetable:', error);
+  //       throw error; // This will be caught by useQuery's error handling
+  //     }
+  //   },
+  //   {
+  //     enabled: !!filters.department_id && !!filters.semester,
+  //     onError: (error) => {
+  //       setSnackbar({
+  //         open: true,
+  //         message: error.message,
+  //         severity: 'error',
+  //       });
+  //     }
+  //   }
+  // );
 
   // Generate timetable mutation
   const generateMutation = useMutation(
@@ -93,7 +267,7 @@ const TimetableGenerator = () => {
     setFilters(prev => ({ ...prev, [field]: value }));
   };
 
-  const handleGenerate = () => {
+  const handleGenerateTimetable = () => {
     if (!filters.department_id) {
       setSnackbar({
         open: true,
@@ -150,10 +324,43 @@ const TimetableGenerator = () => {
     '3:00-4:00',
     '4:00-5:00',
   ];
-
+  
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
   const selectedDepartment = departments.find(d => d.id === filters.department_id);
+
+  const handleExportPdf = () => {
+    if (!timetable?.info) {
+      setSnackbar({
+        open: true,
+        message: 'No timetable data available to export',
+        severity: 'warning',
+      });
+      return;
+    }
+  
+    try {
+      // Make sure we're passing the correct data structure
+      generateTimetablePdf(
+        {
+          ...timetable.info,
+          department_name: timetable.info.department_name || 'Department',
+          section: timetable.info.section || 'A',
+          semester: timetable.info.semester || '1',
+          department_code: timetable.info.department_code || 'DEPT',
+          generated_by_name: timetable.info.generated_by_name || 'System'
+        },
+        timetable.slots || []
+      );
+    } catch (error) {
+      console.error('Export error:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to generate PDF: ' + error.message,
+        severity: 'error',
+      });
+    }
+  };
 
   return (
     <Box>
@@ -220,14 +427,28 @@ const TimetableGenerator = () => {
       {/* Actions */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Box display="flex" gap={2} alignItems="center">
-          <Button
-            variant="contained"
-            startIcon={<GenerateIcon />}
-            onClick={handleGenerate}
-            disabled={generateMutation.isLoading || !filters.department_id}
-          >
-            {generateMutation.isLoading ? 'Generating...' : 'Generate Timetable'}
-          </Button>
+          <Box sx={{ display: 'flex', gap: 2 }}>
+            <Button
+              variant="contained"
+              color="primary"
+              startIcon={<GenerateIcon />}
+              onClick={handleGenerateTimetable}
+              disabled={generateMutation.isLoading || !filters.department_id || !filters.semester}
+            >
+              {timetable ? 'Regenerate' : 'Generate'} Timetable
+            </Button>
+            {timetable && (
+              <Button
+                variant="outlined"
+                color="secondary"
+                startIcon={<PdfIcon />}
+                onClick={handleExportPdf}
+                disabled={!timetable?.info?.id}
+              >
+                Export as PDF
+              </Button>
+            )}
+          </Box>
           <Button
             variant="outlined"
             startIcon={<RegenerateIcon />}
@@ -238,7 +459,7 @@ const TimetableGenerator = () => {
           </Button>
           <Button
             variant="outlined"
-            startIcon={<DownloadIcon />}
+            startIcon={<Download />}
             onClick={handleDownload}
             disabled={!timetable}
           >
@@ -255,23 +476,32 @@ const TimetableGenerator = () => {
         </Box>
       ) : timetable ? (
         <Paper sx={{ p: 3 }}>
-          <Typography variant="h6" gutterBottom>
-            Generated Timetable
-          </Typography>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+            <Typography variant="h6">
+              Generated Timetable
+            </Typography>
+            {timetable.info?.generatedAt && (
+              <Typography variant="caption" color="textSecondary">
+                Generated on: {new Date(timetable.info.generatedAt).toLocaleString()}
+                {timetable.info.generatedBy && ` by ${timetable.info.generatedBy}`}
+              </Typography>
+            )}
+          </Box>
           <Box mb={2}>
             <Chip 
-              label={`Department: ${selectedDepartment?.name}`} 
+              label={`Department: ${timetable.info?.department || selectedDepartment?.name || 'N/A'}`} 
               color="primary" 
-              sx={{ mr: 1 }} 
+              sx={{ mr: 1, mb: 1 }} 
             />
             <Chip 
-              label={`Section: ${filters.section}`} 
+              label={`Section: ${timetable.info?.section || filters.section || 'N/A'}`} 
               color="secondary" 
-              sx={{ mr: 1 }} 
+              sx={{ mr: 1, mb: 1 }} 
             />
             <Chip 
-              label={`Semester: ${filters.semester}`} 
-              color="default" 
+              label={`Semester: ${timetable.info?.semester || filters.semester || 'N/A'}`} 
+              color="default"
+              sx={{ mb: 1 }}
             />
           </Box>
           
@@ -294,13 +524,13 @@ const TimetableGenerator = () => {
                       {timeSlot}
                     </TableCell>
                     {days.map((day, dayIndex) => {
-                      const slot = timetable.schedule?.[dayIndex]?.[timeIndex];
+                      const slot = timetable?.schedule?.[dayIndex]?.[timeIndex];
                       return (
                         <TableCell key={day} align="center">
                           {slot ? (
                             <Box>
                               <Typography variant="body2" fontWeight="bold">
-                                {slot.subject}
+                                {slot.department_code}
                               </Typography>
                               <Typography variant="caption" color="textSecondary">
                                 {slot.teacher}

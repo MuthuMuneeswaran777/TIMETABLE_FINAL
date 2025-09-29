@@ -17,7 +17,7 @@ import {
   TableRow,
 } from '@mui/material';
 import { useAuth } from '../../contexts/AuthContext';
-import axios from 'axios';
+import api from '../../services/api';
 
 const SubjectAllocation = () => {
   const { user } = useAuth();
@@ -26,7 +26,7 @@ const SubjectAllocation = () => {
   const { data: allocations, isLoading, error } = useQuery(
     ['teacher-allocations', user?.teacher_id],
     async () => {
-      const response = await axios.get(`/api/teachers/${user.teacher_id}/allocations`);
+      const response = await api.get(`/teachers/${user.teacher_id}/allocations`);
       return response.data;
     },
     {

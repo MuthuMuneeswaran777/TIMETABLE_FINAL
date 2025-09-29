@@ -2,6 +2,7 @@ const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
 const path = require('path');
 
+// const dbPath = path.join(__dirname, '..', 'database.sqlite');
 const dbPath = path.join(__dirname, '..', 'database', 'timetable_scheduler.db');
 
 console.log('🔄 Resetting admin user...');

@@ -9,6 +9,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
@@ -21,6 +22,7 @@
     "morgan": "^1.10.0",
     "mysql2": "^3.6.0",
     "node-cron": "^3.0.2",
+    "pdfkit": "^0.17.2",
     "python-shell": "^5.0.0",
     "sqlite3": "^5.1.7"
   },

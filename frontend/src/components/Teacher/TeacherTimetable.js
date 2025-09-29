@@ -106,7 +106,7 @@ const TeacherTimetable = () => {
                 Total Classes This Week
               </Typography>
               <Typography variant="h4">
-                {stats?.totalClasses || 0}
+                {stats?.total_classes || 0}
               </Typography>
             </CardContent>
           </Card>
@@ -118,7 +118,7 @@ const TeacherTimetable = () => {
                 Subjects Teaching
               </Typography>
               <Typography variant="h4">
-                {stats?.subjectsCount || 0}
+                {stats?.subjects_count || 0}
               </Typography>
             </CardContent>
           </Card>
@@ -130,7 +130,7 @@ const TeacherTimetable = () => {
                 Departments
               </Typography>
               <Typography variant="h4">
-                {stats?.departmentsCount || 0}
+                {stats?.departments_count || 0}
               </Typography>
             </CardContent>
           </Card>
@@ -142,7 +142,7 @@ const TeacherTimetable = () => {
                 Max Sessions/Week
               </Typography>
               <Typography variant="h4">
-                {user?.max_sessions_per_week || 0}
+                {stats?.max_sessions_per_week || 0}
               </Typography>
             </CardContent>
           </Card>
@@ -162,7 +162,7 @@ const TeacherTimetable = () => {
               sx={{ mr: 1 }} 
             />
             <Chip 
-              label={`Department: ${user?.department?.name || 'N/A'}`} 
+              label={`Department: ${user?.department_name || 'N/A'}`} 
               color="secondary" 
             />
           </Box>

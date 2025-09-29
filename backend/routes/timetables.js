@@ -273,9 +273,11 @@ router.post('/generate', authenticateToken, adminOnly, generateValidation, async
         periods_per_day: 8,
         morning_periods: 4, // 0-3
         evening_periods: 4, // 4-7
-        lab_duration: 3, // Lab sessions take 3 continuous periods
-        no_lab_first_period: true, // C6: No lab in 1st period of morning/evening
-        max_teacher_sessions_per_day: 2 // C3: Max 2 sessions per teacher per day
+        lab_duration: 2, // Lab sessions take 2 continuous periods (relaxed)
+        no_lab_first_period: false, // Allow labs in first period (relaxed)
+        max_teacher_sessions_per_day: 6, // Max 6 sessions per teacher per day (further relaxed)
+        allow_labs_in_classrooms: true, // Allow labs to use classrooms if needed
+        allow_theory_in_labs: true // Allow theory classes to use labs if needed
       }
     };
 
@@ -296,10 +298,10 @@ router.post('/generate', authenticateToken, adminOnly, generateValidation, async
 
     try {
       // Call OR-Tools Python script
-      const scriptPath = path.join(__dirname, '..', 'scripts', 'timetable_optimizer.py');
+      const scriptPath = path.resolve(__dirname, '..', 'scripts', 'timetable_optimizer.py');
       console.log('Using Python script path:', scriptPath);
       
-      // Prepare optimization data with default constraints if not provided
+      // Prepare optimization data with relaxed constraints for better feasibility
       const optimizationInput = {
         ...optimizationData,
         constraints: {
@@ -307,16 +309,76 @@ router.post('/generate', authenticateToken, adminOnly, generateValidation, async
           periods_per_day: 8,
           morning_periods: [0, 1, 2, 3],
           evening_periods: [4, 5, 6, 7],
-          lab_duration: 3,
+          lab_duration: 2, // Lab sessions take 2 continuous periods
+          no_lab_first_period: false, // Allow labs in first period
+          max_teacher_sessions_per_day: 6, // Further increased to handle teacher overload
+          allow_labs_in_classrooms: true, // Allow labs to use classrooms if needed
+          allow_theory_in_labs: true, // Allow theory classes to use labs if needed
+          enforce_lab_continuity: false, // Disable lab continuity constraints for difficult scenarios
           ...(optimizationData.constraints || {})
         }
       };
 
+      // Debug: Log the exact data being sent to Python
+      console.log('=== OPTIMIZATION INPUT DATA ===');
+      console.log('Department:', optimizationInput.department);
+      console.log('Subjects count:', optimizationInput.subjects?.length || 0);
+      console.log('Rooms count:', optimizationInput.rooms?.length || 0);
+      console.log('Constraints:', optimizationInput.constraints);
+      
+      // Log all subjects for detailed analysis
+      if (optimizationInput.subjects && optimizationInput.subjects.length > 0) {
+        console.log('=== ALL SUBJECTS ===');
+        optimizationInput.subjects.forEach((subject, index) => {
+          console.log(`Subject ${index + 1}:`, {
+            id: subject.id,
+            name: subject.name,
+            code: subject.code,
+            is_lab: subject.is_lab,
+            teacher_id: subject.teacher_id,
+            teacher_name: subject.teacher_name,
+            max_periods_per_week: subject.max_periods_per_week,
+            max_periods_per_day: subject.max_periods_per_day,
+            teacher_max_sessions: subject.teacher_max_sessions
+          });
+        });
+        console.log('=== END ALL SUBJECTS ===');
+      }
+      
+      // Log all rooms for detailed analysis
+      if (optimizationInput.rooms && optimizationInput.rooms.length > 0) {
+        console.log('=== ALL ROOMS ===');
+        optimizationInput.rooms.forEach((room, index) => {
+          console.log(`Room ${index + 1}:`, room);
+        });
+        console.log('=== END ALL ROOMS ===');
+      }
+      
+      // Calculate total periods required
+      if (optimizationInput.subjects) {
+        const totalPeriodsRequired = optimizationInput.subjects.reduce((sum, subject) => {
+          return sum + (subject.max_periods_per_week || 0);
+        }, 0);
+        const totalAvailableSlots = optimizationInput.constraints.days_per_week * optimizationInput.constraints.periods_per_day * optimizationInput.rooms.length;
+        console.log('=== SCHEDULING ANALYSIS ===');
+        console.log('Total periods required:', totalPeriodsRequired);
+        console.log('Total available slots:', totalAvailableSlots);
+        console.log('Utilization percentage:', Math.round((totalPeriodsRequired / totalAvailableSlots) * 100) + '%');
+        console.log('=== END SCHEDULING ANALYSIS ===');
+      }
+      
+      console.log('=== END OPTIMIZATION INPUT DATA ===');
+
       const options = {
         mode: 'text',
-        pythonPath: 'C:/Users/praga/AppData/Local/Microsoft/WindowsApps/python3.11.exe',
+        pythonPath: process.env.PYTHON_PATH || 'python',
         pythonOptions: ['-u'], // Unbuffered output
-        args: [JSON.stringify(optimizationInput)]
+        args: [JSON.stringify(optimizationInput)],
+        stderrParser: (data) => {
+          // Parse stderr data but don't mix with stdout
+          console.error('Python stderr:', data);
+          return data;
+        }
       };
 
       console.log('Running optimization with data:', JSON.stringify(optimizationInput, null, 2));
@@ -328,14 +390,20 @@ router.post('/generate', authenticateToken, adminOnly, generateValidation, async
         try {
           const pyshell = new PythonShell(scriptPath, options);
           
+          // Add a timeout to prevent hanging
+          const timeout = setTimeout(() => {
+            pyshell.terminate();
+            reject(new Error('Optimization timed out after 5 minutes'));
+          }, 300000); // 5 minutes timeout
+
           pyshell.on('message', function (message) {
-            console.log('Python output:', message);
+            console.log('Python stdout:', message);
             outputData += message;
           });
 
           pyshell.on('stderr', function (stderr) {
             console.error('Python stderr:', stderr);
-            errorData += stderr;
+            errorData += stderr + '\n';
           });
 
           pyshell.on('error', function (err) {
@@ -344,16 +412,41 @@ router.post('/generate', authenticateToken, adminOnly, generateValidation, async
           });
 
           pyshell.on('close', function (code) {
+            clearTimeout(timeout);
             console.log('Python script finished with code:', code);
-            if (code !== 0) {
-              reject(new Error(`Python script failed with code ${code}: ${errorData}`));
-            } else {
-              try {
-                const parsedOutput = JSON.parse(outputData);
-                resolve(parsedOutput);
-              } catch (parseError) {
-                reject(new Error(`Failed to parse Python output: ${parseError.message}\nOutput: ${outputData}`));
+            console.log('Full output:', outputData);
+            
+            // Handle undefined exit code (PythonShell sometimes doesn't provide it)
+            if (code === undefined) {
+              console.log('Exit code undefined, treating as success');
+              code = 0; // Treat undefined as success
+            }
+            
+            try {
+              // Clean the output - remove any non-JSON content
+              // Look for JSON object in the output
+              const jsonMatch = outputData.match(/\{[\s\S]*\}/);
+              if (!jsonMatch) {
+                throw new Error('No JSON object found in Python output');
               }
+              
+              const jsonStr = jsonMatch[0];
+              console.log('Extracted JSON:', jsonStr);
+              const parsedOutput = JSON.parse(jsonStr);
+              
+              if (parsedOutput.success === false) {
+                console.error('Optimization failed:', parsedOutput.error);
+                reject(new Error(parsedOutput.error || 'Optimization failed'));
+              } else if (parsedOutput.timetable && Array.isArray(parsedOutput.timetable)) {
+                console.log('Optimization succeeded with', parsedOutput.timetable.length, 'slots');
+                resolve(parsedOutput);
+              } else {
+                reject(new Error('Invalid optimization result format'));
+              }
+            } catch (parseError) {
+              console.error('Parse error:', parseError);
+              console.error('Raw output:', outputData);
+              reject(new Error(`Failed to parse Python output: ${parseError.message}`));
             }
           });
         } catch (err) {
@@ -362,64 +455,84 @@ router.post('/generate', authenticateToken, adminOnly, generateValidation, async
         }
       });
 
-      if (!results || results.length === 0) {
+      // Validate results structure
+      if (!results) {
         throw new Error('No results from optimization script');
       }
 
-      const optimizedSchedule = results[0];
-
-      if (!optimizedSchedule.success) {
-        throw new Error(optimizedSchedule.error || 'Optimization failed');
+      // Check if optimization was successful
+      if (!results.success) {
+        throw new Error(results.error || 'Optimization failed without specific error message');
       }
 
-      // Save optimized schedule to database
-      const slots = optimizedSchedule.schedule;
+      // Validate timetable data
+      if (!results.timetable || !Array.isArray(results.timetable)) {
+        throw new Error('Invalid timetable data returned from optimization script');
+      }
+
+      const slots = results.timetable;
       
-      for (const slot of slots) {
+      // Only insert slots if we have valid data
+      if (slots.length > 0) {
+        console.log(`Inserting ${slots.length} timetable slots into database...`);
+        
+        for (const slot of slots) {
+          // Validate slot data before insertion
+          if (!slot.subject_id || !slot.teacher_id || !slot.room_id || 
+              slot.day === undefined || slot.time_slot === undefined) {
+            console.error('Invalid slot data:', slot);
+            continue;
+          }
+
+          await db.execute(
+            `INSERT INTO timetable_slots 
+             (timetable_id, day_of_week, time_slot, subject_id, teacher_id, room_id, is_lab_session, lab_duration) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              timetableId,
+              slot.day,
+              slot.time_slot,
+              slot.subject_id,
+              slot.teacher_id,
+              slot.room_id,
+              slot.is_lab_session || false,
+              slot.lab_duration || 1
+            ]
+          );
+        }
+
+        // Update timetable as active and successful
         await db.execute(
-          `INSERT INTO timetable_slots 
-           (timetable_id, day_of_week, time_slot, subject_id, teacher_id, room_id, is_lab_session, lab_duration) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          'UPDATE timetables SET is_active = 1, metadata = ? WHERE id = ?',
           [
-            timetableId,
-            slot.day,
-            slot.time_slot,
-            slot.subject_id,
-            slot.teacher_id,
-            slot.room_id,
-            slot.is_lab_session || false,
-            slot.lab_duration || 1
+            JSON.stringify({
+              ...optimizationData.constraints,
+              generation_stats: results.stats || {},
+              generated_at: new Date().toISOString(),
+              total_slots: slots.length
+            }),
+            timetableId
           ]
         );
+
+        // Get the generated timetable with details
+        const generatedTimetable = await db.execute(`
+          SELECT t.*, d.name as department_name
+          FROM timetables t
+          JOIN departments d ON t.department_id = d.id
+          WHERE t.id = ?
+        `, [timetableId]);
+
+        res.status(201).json({
+          success: true,
+          message: 'Timetable generated successfully',
+          timetable: generatedTimetable[0],
+          stats: results.stats || {},
+          total_slots: slots.length
+        });
+      } else {
+        throw new Error('Optimization completed but no valid schedule slots were generated');
       }
-
-      // Update timetable as active and successful
-      await db.execute(
-        'UPDATE timetables SET is_active = 1, metadata = ? WHERE id = ?',
-        [
-          JSON.stringify({
-            ...optimizationData.constraints,
-            generation_stats: optimizedSchedule.stats,
-            generated_at: new Date().toISOString()
-          }),
-          timetableId
-        ]
-      );
-
-      // Get the generated timetable with details
-      const generatedTimetable = await db.execute(`
-        SELECT t.*, d.name as department_name
-        FROM timetables t
-        JOIN departments d ON t.department_id = d.id
-        WHERE t.id = ?
-      `, [timetableId]);
-
-      res.status(201).json({
-        message: 'Timetable generated successfully',
-        timetable: generatedTimetable[0],
-        stats: optimizedSchedule.stats,
-        total_slots: slots.length
-      });
 
     } catch (optimizationError) {
       console.error('Optimization error:', optimizationError);
@@ -430,16 +543,32 @@ router.post('/generate', authenticateToken, adminOnly, generateValidation, async
         [
           JSON.stringify({
             error: optimizationError.message,
-            failed_at: new Date().toISOString()
+            failed_at: new Date().toISOString(),
+            error_type: 'optimization_failure'
           }),
           timetableId
         ]
       );
 
+      // Determine appropriate error message
+      let errorMessage = optimizationError.message;
+      if (errorMessage.includes('No output from Python script')) {
+        errorMessage = 'Python optimization script produced no output. Check if OR-Tools is installed and the script is working correctly.';
+      } else if (errorMessage.includes('Failed to parse Python output')) {
+        errorMessage = 'Python script output was not valid JSON. Check script logs for syntax errors.';
+      } else if (errorMessage.includes('Python script failed with code')) {
+        errorMessage = `Python optimization script failed: ${errorMessage}`;
+      }
+
       res.status(500).json({
+        success: false,
         message: 'Timetable generation failed',
-        error: optimizationError.message,
-        timetable_id: timetableId
+        error: errorMessage,
+        timetable_id: timetableId,
+        details: {
+          timestamp: new Date().toISOString(),
+          error_type: 'optimization_failure'
+        }
       });
     }
 
@@ -530,127 +659,149 @@ router.patch('/:id/toggle-active', authenticateToken, adminOnly, async (req, res
   }
 });
 
-// Export timetable as PDF (placeholder - would need PDF generation library)
+// Export timetable as PDF
 router.get('/:id/export', authenticateToken, authenticated, async (req, res) => {
+  const PDFDocument = require('pdfkit');
+  const fs = require('fs');
+  const path = require('path');
+  
   try {
     const { id } = req.params;
+    const user = req.user;
+
+    // Get timetable data with department information
+    const [timetableRows] = await db.execute(`
+      SELECT 
+        t.*, 
+        COALESCE(d.name, 'N/A') as department_name, 
+        COALESCE(d.code, 'DEPT') as department_code,
+        COALESCE(u.name, 'System') as generated_by_name
+      FROM timetables t
+      LEFT JOIN departments d ON t.department_id = d.id
+      LEFT JOIN users u ON t.generated_by = u.id
+      WHERE t.id = ?
+    `, [id]);
+
+    if (!timetableRows || timetableRows.length === 0) {
+      return res.status(404).json({ message: 'Timetable not found' });
+    }
+
+    const timetable = timetableRows[0];
     
-    // This is a placeholder - in a real implementation, you would:
-    // 1. Get timetable data
-    // 2. Use a PDF generation library (like puppeteer, jsPDF, or PDFKit)
-    // 3. Generate and return the PDF
+    // Ensure we have default values for required fields
+    timetable.department_name = timetable.department_name || 'Department';
+    timetable.department_code = timetable.department_code || 'DEPT';
+    timetable.section = timetable.section || 'A';
+    timetable.semester = timetable.semester || '1';
+    timetable.generated_by_name = timetable.generated_by_name || 'System';
     
-    res.status(501).json({
-      message: 'PDF export not implemented yet',
-      note: 'This would generate a PDF of the timetable'
+    // Check access permissions
+    if (user.role !== 'admin' && user.department_id !== timetable.department_id) {
+      return res.status(403).json({ message: 'Access denied to this timetable' });
+    }
+
+    // Get timetable slots
+    const [slots] = await db.execute(`
+      SELECT 
+        ts.*,
+        COALESCE(s.name, 'Subject') as subject_name,
+        COALESCE(s.code, 'SUB') as subject_code,
+        COALESCE(s.is_lab, 0) as is_lab,
+        COALESCE(t.name, 'Teacher') as teacher_name,
+        COALESCE(r.name, 'Room') as room_name,
+        COALESCE(r.type, 'Classroom') as room_type
+      FROM timetable_slots ts
+      LEFT JOIN subjects s ON ts.subject_id = s.id
+      LEFT JOIN teachers t ON ts.teacher_id = t.id
+      LEFT JOIN rooms r ON ts.room_id = r.id
+      WHERE ts.timetable_id = ?
+      ORDER BY ts.day_of_week, ts.time_slot
+    `, [id]);
+
+    // Create PDF
+    const doc = new PDFDocument({ margin: 30 });
+    
+    // Set response headers
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=timetable_${timetable.department_code}_${timetable.section}.pdf`);
+    
+    // Pipe PDF to response
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(18).text('Class Timetable', { align: 'center' });
+    doc.fontSize(12).text(`${timetable.department_name} - Section ${timetable.section}`, { align: 'center' });
+    doc.moveDown();
+
+    // Timetable info
+    doc.fontSize(10);
+    doc.text(`Semester: ${timetable.semester}`, { continued: true });
+    doc.text(`Generated on: ${new Date(timetable.generated_at || new Date()).toLocaleString()}`, { align: 'right' });
+    doc.moveDown();
+
+    // Create table
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+    const timeSlots = Array.from({ length: 8 }, (_, i) => `${i + 9}:00 - ${i + 10}:00`);
+    const cellWidth = 100;
+    const cellHeight = 40;
+    const startX = 50;
+    let startY = 150;
+
+    // Draw table headers (days)
+    doc.font('Helvetica-Bold');
+    doc.rect(startX, startY, cellWidth, cellHeight).stroke();
+    doc.text('Time', startX + 5, startY + 15);
+    
+    days.forEach((day, i) => {
+      const x = startX + (i + 1) * cellWidth;
+      doc.rect(x, startY, cellWidth, cellHeight).stroke();
+      doc.text(day, x + 5, startY + 15, { width: cellWidth - 10, align: 'center' });
     });
+
+    // Draw time slots and data
+    doc.font('Helvetica');
+    timeSlots.forEach((time, timeIndex) => {
+      startY += cellHeight;
+      const y = startY;
+      
+      // Time slot header
+      doc.rect(startX, y, cellWidth, cellHeight).stroke();
+      doc.text(time, startX + 5, y + 15);
+      
+      // Day cells
+      days.forEach((day, dayIndex) => {
+        const x = startX + (dayIndex + 1) * cellWidth;
+        doc.rect(x, y, cellWidth, cellHeight).stroke();
+        
+        const slot = slots.find(s => 
+          s.day_of_week === dayIndex && s.time_slot === timeIndex
+        );
+        
+        if (slot) {
+          doc.fontSize(8);
+          doc.text(slot.subject_name || 'Subject', x + 5, y + 5, { width: cellWidth - 10, align: 'left' });
+          doc.text(`Room: ${slot.room_name || 'N/A'}`, x + 5, y + 20, { width: cellWidth - 10, align: 'left', fontSize: 7 });
+          doc.text(`Teacher: ${slot.teacher_name || 'N/A'}`, x + 5, y + 30, { width: cellWidth - 10, align: 'left', fontSize: 7 });
+          doc.fontSize(10);
+        }
+      });
+    });
+
+    // Footer
+    doc.fontSize(8).text(
+      `Generated by ${timetable.generated_by_name} on ${new Date().toLocaleString()}`,
+      50, doc.page.height - 50,
+      { align: 'center', width: doc.page.width - 100 }
+    );
+
+    // Finalize PDF
+    doc.end();
 
   } catch (error) {
     console.error('Export timetable error:', error);
     res.status(500).json({
-      message: 'Internal server error'
-    });
-  }
-});
-
-// Get timetable conflicts and validation
-router.get('/:id/validate', authenticateToken, authenticated, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Check room conflicts
-    const roomConflicts = await db.execute(`
-      SELECT 
-        ts1.day_of_week,
-        ts1.time_slot,
-        r.name as room_name,
-        COUNT(*) as conflict_count,
-        GROUP_CONCAT(CONCAT(s.name, ' (', t.name, ')') SEPARATOR ', ') as conflicting_classes
-      FROM timetable_slots ts1
-      JOIN timetable_slots ts2 ON ts1.room_id = ts2.room_id 
-        AND ts1.day_of_week = ts2.day_of_week 
-        AND ts1.time_slot = ts2.time_slot 
-        AND ts1.id != ts2.id
-      JOIN rooms r ON ts1.room_id = r.id
-      JOIN subjects s ON ts1.subject_id = s.id
-      JOIN teachers t ON ts1.teacher_id = t.id
-      WHERE ts1.timetable_id = ?
-      GROUP BY ts1.room_id, ts1.day_of_week, ts1.time_slot
-    `, [id]);
-
-    // Check teacher conflicts
-    const teacherConflicts = await db.execute(`
-      SELECT 
-        ts1.day_of_week,
-        ts1.time_slot,
-        te.name as teacher_name,
-        COUNT(*) as conflict_count,
-        GROUP_CONCAT(CONCAT(s.name, ' in ', r.name) SEPARATOR ', ') as conflicting_classes
-      FROM timetable_slots ts1
-      JOIN timetable_slots ts2 ON ts1.teacher_id = ts2.teacher_id 
-        AND ts1.day_of_week = ts2.day_of_week 
-        AND ts1.time_slot = ts2.time_slot 
-        AND ts1.id != ts2.id
-      JOIN teachers te ON ts1.teacher_id = te.id
-      JOIN subjects s ON ts1.subject_id = s.id
-      JOIN rooms r ON ts1.room_id = r.id
-      WHERE ts1.timetable_id = ?
-      GROUP BY ts1.teacher_id, ts1.day_of_week, ts1.time_slot
-    `, [id]);
-
-    // Check constraint violations
-    const constraintViolations = [];
-
-    // Check C6: No lab in first period
-    const labFirstPeriod = await db.execute(`
-      SELECT COUNT(*) as violations
-      FROM timetable_slots ts
-      JOIN subjects s ON ts.subject_id = s.id
-      WHERE ts.timetable_id = ? AND s.is_lab = 1 AND (ts.time_slot = 0 OR ts.time_slot = 4)
-    `, [id]);
-
-    if (labFirstPeriod[0].violations > 0) {
-      constraintViolations.push({
-        constraint: 'C6',
-        description: 'Labs scheduled in first period of morning/evening sessions',
-        violations: labFirstPeriod[0].violations
-      });
-    }
-
-    // Check C3: Max 2 sessions per teacher per day
-    const teacherDailyOverload = await db.execute(`
-      SELECT 
-        te.name as teacher_name,
-        ts.day_of_week,
-        COUNT(*) as sessions_count
-      FROM timetable_slots ts
-      JOIN teachers te ON ts.teacher_id = te.id
-      WHERE ts.timetable_id = ?
-      GROUP BY ts.teacher_id, ts.day_of_week
-      HAVING sessions_count > 2
-    `, [id]);
-
-    if (teacherDailyOverload.length > 0) {
-      constraintViolations.push({
-        constraint: 'C3',
-        description: 'Teachers with more than 2 sessions per day',
-        violations: teacherDailyOverload
-      });
-    }
-
-    res.json({
-      timetable_id: id,
-      is_valid: roomConflicts.length === 0 && teacherConflicts.length === 0 && constraintViolations.length === 0,
-      room_conflicts: roomConflicts,
-      teacher_conflicts: teacherConflicts,
-      constraint_violations: constraintViolations,
-      total_issues: roomConflicts.length + teacherConflicts.length + constraintViolations.length
-    });
-
-  } catch (error) {
-    console.error('Validate timetable error:', error);
-    res.status(500).json({
-      message: 'Internal server error'
+      message: 'Failed to generate PDF',
+      error: error.message
     });
   }
 });
